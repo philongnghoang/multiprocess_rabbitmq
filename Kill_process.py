@@ -22,4 +22,4 @@ if __name__ == '__main__':
     print(running_process)  
     print('Num process running :',len(running_process))
     ##########################
-    kill_all_process(7765)
+    kill_all_process(10883)
