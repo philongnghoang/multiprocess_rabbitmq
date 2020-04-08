@@ -1,22 +1,13 @@
 import cv2,time
 from multiprocessing import Process, Queue, Pipe
 from datetime import datetime
-from threading import Thread
 # import grpc_infer_api
-# import socket
 import sys
 import os
-import pickle
 import psutil
-# import struct ### new code
-# import zmq
-# import base64
-import argparse
-import requests
 import json
 import pika
 import numpy as np
-#from collections import deque
 import get_stream
 import csv
 class Streaming(Process):
@@ -56,15 +47,15 @@ class Streaming(Process):
             if  cap.isOpened(): 
                 try:
                     ret, frame = cap.read()
-                    frame_predict = cv2.resize(frame, (320,320))
+                    #frame = cv2.resize(frame, (320,320))
 
                     if int(round(time.time())) - pre_time > 5:
                         pre_time = int(round(time.time()))
                         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
                 
-                    cv2.imshow('CAM'+self.name,frame_predict)
-                    if cv2.waitKey(30)=='q':
-                        break
+                    cv2.imshow('CAM'+self.name,frame)
+                    if cv2.waitKey(90)=='q':
+                       break
                 except:
                     break
         cap.release()
@@ -156,7 +147,8 @@ if __name__ == "__main__":
     processes       =   {}
     running_process = []
     credentials = pika.PlainCredentials('user', 'user')
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',credentials=credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',heartbeat=10,
+                                       blocked_connection_timeout=300,credentials=credentials))
 
     channel = connection.channel()
     channel.queue_declare(queue='mes')
