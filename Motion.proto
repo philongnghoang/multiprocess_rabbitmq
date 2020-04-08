@@ -1,0 +1,23 @@
+//Define the used version of proto:
+syntax = 'proto3';
+import "ndarray.proto";
+
+message Features{
+    string queue_id                           = 1 ;
+    string image_id                           = 2 ;
+    numproto.protobuf.NDArray CurFrame        = 3 ;
+    int64 MaskSize                            = 4 ;
+    int64 Threshold                           = 5 ;
+    int64 ImageSize                           = 6 ;
+}
+
+message Prediction{
+    bool Status                               = 1 ;
+    int64 NumBoxes                            = 2 ;
+    bytes Boxes                               = 3 ;
+}
+
+//Define the service :
+service Predict{
+    rpc DetectMotion(Features) returns (Prediction){}
+}

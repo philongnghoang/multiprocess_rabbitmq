@@ -114,8 +114,6 @@ def GetStream():
                     'https://5a2f17f8a961a.streamlock.net:61950/live/cto_phongtonghop_48_152.stream/playlist.m3u8',
                     'https://5a2f17f8a961a.streamlock.net:61950/live/epz2-p-sanhchinhtret-39-200.stream/playlist.m3u8',
                     'https://5a2f17f8a961a.streamlock.net:61950/live/front_door_1.stream/playlist.m3u8',
-                    'https://5a2f17f8a961a.streamlock.net:61950/live/vung5-cuchi-04.stream/playlist.m3u8',
-                    'https://5a3418b6a1dac.streamlock.net:1937/live/cto_pgd_thotnot_02_48_138.stream/playlist.m3u8',
                     'https://5a3418b6a1dac.streamlock.net:2937/live/bda-cam-03.stream/playlist.m3u8',
                     'https://5a3418b6a1dac.streamlock.net:2937/live/dlk-bho-c5-cam1.stream/playlist.m3u8',
                     'https://5a3418b6a1dac.streamlock.net:2937/live/dth_ftc_cam33.stream/playlist.m3u8',
@@ -128,6 +126,8 @@ def GetStream():
                     'https://5a3505075bba2.streamlock.net:2167/live/test-add-new.stream/playlist.m3u8',
                     'https://5a3505075bba2.streamlock.net:2952/live/cayqueo_cam03.stream/playlist.m3u8',
                     'https://5a3505075bba2.streamlock.net:2952/live/epz2-p-thang3l5-39-216.stream/playlist.m3u8',
-                    'https://5a3505075bba2.streamlock.net:2952/live/ftel-pvi-cuaphu.stream/playlist.m3u8'
+                    'https://5a3505075bba2.streamlock.net:2952/live/ftel-pvi-cuaphu.stream/playlist.m3u8',
+                    'rtsp://admin:AI_team123@192.168.1.63:554/Streaming/Channels/101/',
+                    'rtsp://admin:AI_team123@192.168.1.64:554/Streaming/Channels/101/'
                     ]
     return stream_list

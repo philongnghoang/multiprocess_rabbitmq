@@ -1,7 +1,7 @@
 import cv2,time
 from multiprocessing import Process, Queue, Pipe
 from datetime import datetime
-# import grpc_infer_api
+import grpc_infer_api
 import sys
 import os
 import psutil
@@ -10,6 +10,10 @@ import pika
 import numpy as np
 import get_stream
 import csv
+import Motion_pb2
+import Motion_pb2_grpc
+from numproto import ndarray_to_proto, proto_to_ndarray
+import grpc
 class Streaming(Process):
     
     def __init__(self, name, URL, start_date, stop_date, FPS, **kwargs):
@@ -23,7 +27,8 @@ class Streaming(Process):
         self.FPS = FPS
 
         self.credentials = pika.PlainCredentials('user', 'user')
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',credentials=self.credentials))
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',heartbeat=10,
+                                       blocked_connection_timeout=300,credentials=self.credentials))
 
         self.channel = self.connection.channel()
         self.queue_name = self.name
@@ -31,37 +36,104 @@ class Streaming(Process):
         self.channel.queue_declare(queue='result')
         #self.channel.exchange_declare(exchange='check_status', exchange_type='fanout')
         self.channel.queue_bind(exchange='check_status', queue=self.queue_name)
-        self.rabbit_status = {}
- 
+        self.message_respond = {}
+        self.API_ENDPOINT = '192.168.1.45:8101'
         #################################################
-        
+        self.OD_model =  grpc_infer_api.GRPC_inference_OD(hostport=self.API_ENDPOINT, model_name='OD', signature_name='serving_default', image_shape=(640 , 640),\
+		                                  graph_input_name='input', graph_score_name='score', graph_numbox_name='num', graph_classes_name='classes',\
+		                                  graph_boxes_name='boxes')
+        #################################################
+        self.options = [('grpc.max_send_message_length', 512 * 1024 * 1024), ('grpc.max_receive_message_length', 512 * 1024 * 1024)]
+        self.hostname = '192.168.1.45'
+        self.port = '8818'
+        self.channel_motion = grpc.insecure_channel(self.hostname + ':' + str(self.port), options=self.options)
+        self.stub = Motion_pb2_grpc.PredictStub(self.channel_motion)
+
+    def moving_visualize(self,status,num_box,boxes,frame):
+        h_origin = frame.shape[0]
+        w_origin = frame.shape[1]
+        for cur_b in boxes:
+            xmin_cur, ymin_cur, xmax_cur, ymax_cur = int(cur_b[0]*w_origin), int(cur_b[1]*h_origin),int((cur_b[0]+cur_b[2])*w_origin),int((cur_b[1]+cur_b[3])*h_origin)
+            cv2.rectangle(frame, (xmin_cur, ymin_cur), (xmax_cur, ymax_cur), (0, 255, 0), 2)
+        return frame
+    
+    def movingcheck(self,queue_id,image_id, CurFrame,mask_size = 40,threshold_cam =20):
+        CurFrame = cv2.cvtColor(CurFrame, cv2.COLOR_BGR2GRAY)
+
+        CurFrame_send = ndarray_to_proto(CurFrame)
+        requestPrediction  = Motion_pb2.Features(queue_id = queue_id,image_id=image_id,
+                                    CurFrame = CurFrame_send, MaskSize= mask_size,
+                                    Threshold = threshold_cam,ImageSize=640)
+
+        responsePrediction = self.stub.DetectMotion(requestPrediction,10)
+        status = responsePrediction.Status
+        num_box = responsePrediction.NumBoxes
+        if status:
+            result = np.frombuffer(responsePrediction.Boxes, dtype= 'float')
+            result = result.reshape(num_box,4)
+        else:
+            result = np.array([])
+
+        return status,num_box,result
 
     def run(self):
         #print(os.getpid())
         cap = cv2.VideoCapture(self.URL)
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+        frame_id = 0
+        pre_frame_id = 0
+        
         pre_time = int(round(time.time()))
         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
+        # self.channel.basic_publish(exchange='', routing_key='result', body=json.dumps({"urls":self.name,"opcode":"start"})) 
         while(self.Run):
             self.Comunicate_master()
             if  cap.isOpened(): 
                 try:
                     ret, frame = cap.read()
-                    #frame = cv2.resize(frame, (320,320))
+                    
+                    frame_predict = cv2.resize(frame, (640,640))
+                    #=============================== MOTION DETECT ===============================
+                    image_id = str(frame_id)+ '_' + str(int(round(time.time())))
+                    move, numbox, boxes_motion = self.movingcheck(queue_id =self.name,image_id=image_id,CurFrame =frame_predict)
+                    frame = self.moving_visualize(move,numbox,boxes_motion,frame)
+                    frame_id +=1
+                    #=============================== OD DETECT ===================================
+                    frame_predict = cv2.cvtColor(frame_predict, cv2.COLOR_BGR2RGB)
+                    try:
+                        status, num_box, classes, score, boxes = self.OD_model.do_inference_sync(frame_predict,10)
+                    except: 
+                        status = -1
+                    if num_box != 0:
+                        bnbbox = boxes
+                        for index in range(num_box):
+                            if score[index] > 0.4 and classes[index] == 1 :
+                                h, w, _ = frame.shape
+                                x1, y1, x2, y2 = int(bnbbox[index][1] * w), int(bnbbox[index][0] * h), int(bnbbox[index][3] * w), int(bnbbox[index][2] * h)
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 1)
+                                #cv2.circle(frame, (int((x1+x2)/2),int((y1+y2)/2)),int(max(x2-x1,y2-y1)/2), (0,0,255), thickness=3, lineType=8, shift=0) 
 
                     if int(round(time.time())) - pre_time > 5:
                         pre_time = int(round(time.time()))
                         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
                 
                     cv2.imshow('CAM'+self.name,frame)
-                    if cv2.waitKey(90)=='q':
-                       break
+                    if cv2.waitKey(30)=='q':
+                        self.message_respond['error']='Stop stream'
+                        break
+                       
                 except:
+                    self.message_respond['error']='Code error'
                     break
+            else:
+                self.message_respond['error']='Stream dead'
+                break
         cap.release()
         cv2.destroyAllWindows()
-        self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"stop"}))   
-          
+        self.message_respond['urls'] = self.name
+        self.message_respond['opcode'] = 'stop'
+        self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps(self.message_respond))   
+
     def Comunicate_master(self):
         queue_empty = self.channel.queue_declare(queue=self.queue_name).method.message_count
         if queue_empty!=0:
@@ -87,9 +159,10 @@ class Streaming(Process):
                 self.child_conn.send({'opcode':'settime','state':'error'})
         elif new_recv['opcode'] == 'stop':
             print('Stopping process : ',self.name) 
+            self.message_respond['error']='Stop stream'
             self.Run = False 
         elif new_recv['opcode'] == 'check':    
-            self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
+            self.channel.basic_publish(exchange='', routing_key='result', body=json.dumps({"urls":self.name,"opcode":"start"}))
 
 class Check_alive(Process):
     def __init__(self, **kwargs):
@@ -131,16 +204,17 @@ def callback(ch, method, properties, body):
         channel.basic_publish(exchange='', routing_key=name_process, body=body)
 
 def recive_mes_process(ch, method, properties, body):
-    print('========================================')
+    #print('========================================')
     #print(" [x] [x] [x] ")
     status_process = json.loads(body.decode('utf8'))
-    #print(status_process)
+    
     if status_process['urls'] not in running_process:
         running_process.append(status_process['urls'])
     elif status_process['urls'] in running_process and status_process['opcode']=='stop':
+        print(status_process['urls'],'                    ===> ',status_process['error'])
         running_process.remove(status_process['urls'])
-    print("Running process")
-    print(len(running_process))
+    # print("Running process")
+    # print(len(running_process))
 
 
 if __name__ == "__main__":
@@ -157,10 +231,10 @@ if __name__ == "__main__":
     channel_2 = connection.channel()
     channel_2.queue_declare(queue='send_main')
     channel_2.basic_consume(queue='send_main', on_message_callback=recive_mes_process, auto_ack=True)
-    #################################################################################
-    #p = Check_alive()
-    #p.start()
-    #################################################################################
+    # ################################################################################
+    # p = Check_alive()
+    # p.start()
+    # ################################################################################
     
     print(' [*] Waiting for messages. To exit press CTRL+C')
     channel.start_consuming() 
