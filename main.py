@@ -1,6 +1,6 @@
 import cv2,time
 from multiprocessing import Process, Queue, Pipe
-from datetime import datetime
+from datetime import datetime as time_day
 import grpc_infer_api
 import sys
 import os
@@ -14,6 +14,7 @@ import Motion_pb2
 import Motion_pb2_grpc
 from numproto import ndarray_to_proto, proto_to_ndarray
 import grpc
+import datetime
 class Streaming(Process):
     
     def __init__(self, name, URL, start_date, stop_date, FPS, **kwargs):
@@ -48,7 +49,7 @@ class Streaming(Process):
         self.port = '8818'
         self.channel_motion = grpc.insecure_channel(self.hostname + ':' + str(self.port), options=self.options)
         self.stub = Motion_pb2_grpc.PredictStub(self.channel_motion)
-
+        self.DATA_DIR = '/hdd/Long/DATA_SAVE_8_4/'
     def moving_visualize(self,status,num_box,boxes,frame):
         h_origin = frame.shape[0]
         w_origin = frame.shape[1]
@@ -75,17 +76,44 @@ class Streaming(Process):
             result = np.array([])
 
         return status,num_box,result
+    
+    def overlap_check(self,person_boxes,motion_boxes,frame):
+        h = frame.shape[0]
+        w = frame.shape[1]
+        overlap_check = False
+        for pre_b in person_boxes:
+            xmin_pre, ymin_pre, xmax_pre, ymax_pre = int(pre_b[1]*w), int(pre_b[0]*h),int(pre_b[3]*w),int(pre_b[2]*h)
+            s_pre = (xmax_pre-xmin_pre)*(ymax_pre-ymin_pre)
+            for cur_b in motion_boxes:
+                xmin_cur, ymin_cur, xmax_cur, ymax_cur = int(cur_b[0]*w), int(cur_b[1]*h),int((cur_b[0]+cur_b[2])*w),int((cur_b[1]+cur_b[3])*h)
+                s_cur = (xmax_cur-xmin_cur)*(ymax_cur-ymin_cur)
+                x_min,x_max,y_min,y_max = max(xmin_cur,xmin_pre) , min(xmax_cur,xmax_pre), max(ymin_cur,ymin_pre), min(ymax_cur,ymax_pre)
+                if (x_max-x_min) > 0 and (y_max-y_min) > 0:
+                    Square = abs(x_max-x_min)*abs(y_max-y_min)
+                    if Square > 0.1*min(s_pre,s_cur) : 
+                        overlap_check = True
+                        cv2.rectangle(frame, (xmin_cur, ymin_cur), (xmax_cur, ymax_cur), (255, 0, 0), 1)
+
+        return overlap_check,frame
 
     def run(self):
-        #print(os.getpid())
+        save_dir = self.DATA_DIR + self.name
+        if not os.path.isdir(save_dir):
+            os.mkdir(save_dir)        # Create target Directory
+            print("Directory " , save_dir ,  " Created ")
+        else:
+            print("Directory " , save_dir ,  " already exists")
+      
         cap = cv2.VideoCapture(self.URL)
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
         frame_id = 0
         pre_frame_id = 0
         
         pre_time = int(round(time.time()))
+        pre_time_save = int(round(time.time()))
         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
         # self.channel.basic_publish(exchange='', routing_key='result', body=json.dumps({"urls":self.name,"opcode":"start"})) 
+        save_check = False
         while(self.Run):
             self.Comunicate_master()
             if  cap.isOpened(): 
@@ -106,21 +134,36 @@ class Streaming(Process):
                         status = -1
                     if num_box != 0:
                         bnbbox = boxes
+                        person_boxes = []
+                        person_check = False
                         for index in range(num_box):
                             if score[index] > 0.4 and classes[index] == 1 :
                                 h, w, _ = frame.shape
                                 x1, y1, x2, y2 = int(bnbbox[index][1] * w), int(bnbbox[index][0] * h), int(bnbbox[index][3] * w), int(bnbbox[index][2] * h)
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 1)
-                                #cv2.circle(frame, (int((x1+x2)/2),int((y1+y2)/2)),int(max(x2-x1,y2-y1)/2), (0,0,255), thickness=3, lineType=8, shift=0) 
-
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2) 
+                                person_boxes.append(bnbbox[index])
+                                person_check = True
+                    #=============================== OVERLAP ===========================================
+                    if move== True and person_check == True:
+                        save_check,frame = self.overlap_check(np.asarray(person_boxes),boxes_motion,frame)
+                    else:
+                        save_check = False
+                    #=============================== UPDATE STATUS ====================================
                     if int(round(time.time())) - pre_time > 5:
                         pre_time = int(round(time.time()))
                         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
-                
-                    cv2.imshow('CAM'+self.name,frame)
-                    if cv2.waitKey(30)=='q':
-                        self.message_respond['error']='Stop stream'
-                        break
+                    #=============================== SHOW IMAGE =====================================
+                    if save_check == True and int(round(time.time())) - pre_time_save > 10:
+                        pre_time_save = int(round(time.time()))          
+                        cur_time = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+                        name = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
+                        cv2.imwrite(name,frame)
+                        print("CAPTURED: ",self.name,'_ Time save:',cur_time)
+
+                    # cv2.imshow('CAM'+self.name,frame)
+                    # if cv2.waitKey(30)=='q':
+                    #     self.message_respond['error']='Stop stream'
+                    #     break
                        
                 except:
                     self.message_respond['error']='Code error'
@@ -190,8 +233,8 @@ def callback(ch, method, properties, body):
     message_rabbitmq = json.loads(body.decode('utf8'))
 
     FPS = 1
-    start_date = datetime(2020, 1, 3, 0, 0, 0, 0)
-    stop_date  = datetime(2021, 10, 25, 6, 0, 0, 0)
+    start_date = time_day(2020, 1, 3, 0, 0, 0, 0)
+    stop_date  = time_day(2021, 10, 25, 6, 0, 0, 0)
 
     name_process = message_rabbitmq['urls'].split('/')[4]
     if message_rabbitmq['opcode'] == 'start' and name_process not in running_process:
