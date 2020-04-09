@@ -28,7 +28,7 @@ class Streaming(Process):
         self.FPS = FPS
 
         self.credentials = pika.PlainCredentials('user', 'user')
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',heartbeat=10,
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',heartbeat=60,
                                        blocked_connection_timeout=300,credentials=self.credentials))
 
         self.channel = self.connection.channel()
@@ -49,7 +49,7 @@ class Streaming(Process):
         self.port = '8818'
         self.channel_motion = grpc.insecure_channel(self.hostname + ':' + str(self.port), options=self.options)
         self.stub = Motion_pb2_grpc.PredictStub(self.channel_motion)
-        self.DATA_DIR = '/hdd/Long/DATA_SAVE_8_4/'
+        self.DATA_DIR = '/hdd/Long/DATA_SAVE_9_4/'
     def moving_visualize(self,status,num_box,boxes,frame):
         h_origin = frame.shape[0]
         w_origin = frame.shape[1]
@@ -58,7 +58,7 @@ class Streaming(Process):
             cv2.rectangle(frame, (xmin_cur, ymin_cur), (xmax_cur, ymax_cur), (0, 255, 0), 2)
         return frame
     
-    def movingcheck(self,queue_id,image_id, CurFrame,mask_size = 40,threshold_cam =20):
+    def movingcheck(self,queue_id,image_id, CurFrame,mask_size = 40,threshold_cam =10):
         CurFrame = cv2.cvtColor(CurFrame, cv2.COLOR_BGR2GRAY)
 
         CurFrame_send = ndarray_to_proto(CurFrame)
@@ -90,9 +90,9 @@ class Streaming(Process):
                 x_min,x_max,y_min,y_max = max(xmin_cur,xmin_pre) , min(xmax_cur,xmax_pre), max(ymin_cur,ymin_pre), min(ymax_cur,ymax_pre)
                 if (x_max-x_min) > 0 and (y_max-y_min) > 0:
                     Square = abs(x_max-x_min)*abs(y_max-y_min)
-                    if Square > 0.1*min(s_pre,s_cur) : 
+                    if Square > 0.4*min(s_pre,s_cur) : 
                         overlap_check = True
-                        cv2.rectangle(frame, (xmin_cur, ymin_cur), (xmax_cur, ymax_cur), (255, 0, 0), 1)
+                        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 0, 255), 1)
 
         return overlap_check,frame
 
@@ -119,31 +119,32 @@ class Streaming(Process):
             if  cap.isOpened(): 
                 try:
                     ret, frame = cap.read()
-                    
+                    frame_orginal = frame.copy()
                     frame_predict = cv2.resize(frame, (640,640))
-                    #=============================== MOTION DETECT ===============================
+                    # #=============================== MOTION DETECT ===============================
                     image_id = str(frame_id)+ '_' + str(int(round(time.time())))
                     move, numbox, boxes_motion = self.movingcheck(queue_id =self.name,image_id=image_id,CurFrame =frame_predict)
                     frame = self.moving_visualize(move,numbox,boxes_motion,frame)
                     frame_id +=1
-                    #=============================== OD DETECT ===================================
+                    # #=============================== OD DETECT ===================================
                     frame_predict = cv2.cvtColor(frame_predict, cv2.COLOR_BGR2RGB)
                     try:
                         status, num_box, classes, score, boxes = self.OD_model.do_inference_sync(frame_predict,10)
                     except: 
                         status = -1
+                    
+                    person_check = False
+                    person_boxes = []
                     if num_box != 0:
                         bnbbox = boxes
-                        person_boxes = []
-                        person_check = False
                         for index in range(num_box):
                             if score[index] > 0.4 and classes[index] == 1 :
                                 h, w, _ = frame.shape
                                 x1, y1, x2, y2 = int(bnbbox[index][1] * w), int(bnbbox[index][0] * h), int(bnbbox[index][3] * w), int(bnbbox[index][2] * h)
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2) 
+                                #cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2) 
                                 person_boxes.append(bnbbox[index])
                                 person_check = True
-                    #=============================== OVERLAP ===========================================
+                    # #=============================== OVERLAP ===========================================
                     if move== True and person_check == True:
                         save_check,frame = self.overlap_check(np.asarray(person_boxes),boxes_motion,frame)
                     else:
@@ -153,17 +154,17 @@ class Streaming(Process):
                         pre_time = int(round(time.time()))
                         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
                     #=============================== SHOW IMAGE =====================================
-                    if save_check == True and int(round(time.time())) - pre_time_save > 10:
+                    if save_check == True and int(round(time.time())) - pre_time_save > 1:
                         pre_time_save = int(round(time.time()))          
                         cur_time = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
                         name = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
                         cv2.imwrite(name,frame)
                         print("CAPTURED: ",self.name,'_ Time save:',cur_time)
 
-                    # cv2.imshow('CAM'+self.name,frame)
-                    # if cv2.waitKey(30)=='q':
-                    #     self.message_respond['error']='Stop stream'
-                    #     break
+                    cv2.imshow('CAM'+self.name,frame)
+                    if cv2.waitKey(30)=='q':
+                        self.message_respond['error']='Stop stream'
+                        break
                        
                 except:
                     self.message_respond['error']='Code error'
@@ -256,8 +257,8 @@ def recive_mes_process(ch, method, properties, body):
     elif status_process['urls'] in running_process and status_process['opcode']=='stop':
         print(status_process['urls'],'                    ===> ',status_process['error'])
         running_process.remove(status_process['urls'])
-    # print("Running process")
-    # print(len(running_process))
+        print("Running process")
+        print(len(running_process))
 
 
 if __name__ == "__main__":
