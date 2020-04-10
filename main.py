@@ -4,7 +4,7 @@ from datetime import datetime as time_day
 import grpc_infer_api
 import sys
 import os
-import psutil
+#import psutil
 import json
 import pika
 import numpy as np
@@ -26,6 +26,9 @@ class Streaming(Process):
         self.start_date = start_date
         self.stop_date  = stop_date
         self.FPS = FPS
+        self.display = True
+        self.Model_od = True
+        self.Model_motion = True
 
         self.credentials = pika.PlainCredentials('user', 'user')
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',heartbeat=60,
@@ -44,7 +47,7 @@ class Streaming(Process):
 		                                  graph_input_name='input', graph_score_name='score', graph_numbox_name='num', graph_classes_name='classes',\
 		                                  graph_boxes_name='boxes')
         #################################################
-        self.options = [('grpc.max_send_message_length', 512 * 1024 * 1024), ('grpc.max_receive_message_length', 512 * 1024 * 1024)]
+        self.options = [('grpc.max_send_message_length', 1024 * 1024 * 1024), ('grpc.max_receive_message_length', 1024 * 1024 * 1024)]
         self.hostname = '192.168.1.45'
         self.port = '8818'
         self.channel_motion = grpc.insecure_channel(self.hostname + ':' + str(self.port), options=self.options)
@@ -61,9 +64,9 @@ class Streaming(Process):
     def movingcheck(self,queue_id,image_id, CurFrame,mask_size = 40,threshold_cam =10):
         CurFrame = cv2.cvtColor(CurFrame, cv2.COLOR_BGR2GRAY)
 
-        CurFrame_send = ndarray_to_proto(CurFrame)
+        CurFrame = ndarray_to_proto(CurFrame)
         requestPrediction  = Motion_pb2.Features(queue_id = queue_id,image_id=image_id,
-                                    CurFrame = CurFrame_send, MaskSize= mask_size,
+                                    CurFrame = CurFrame, MaskSize= mask_size,
                                     Threshold = threshold_cam,ImageSize=640)
 
         responsePrediction = self.stub.DetectMotion(requestPrediction,10)
@@ -114,6 +117,7 @@ class Streaming(Process):
         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
         # self.channel.basic_publish(exchange='', routing_key='result', body=json.dumps({"urls":self.name,"opcode":"start"})) 
         save_check = False
+    
         while(self.Run):
             self.Comunicate_master()
             if  cap.isOpened(): 
@@ -121,50 +125,59 @@ class Streaming(Process):
                     ret, frame = cap.read()
                     frame_orginal = frame.copy()
                     frame_predict = cv2.resize(frame, (640,640))
-                    # #=============================== MOTION DETECT ===============================
-                    image_id = str(frame_id)+ '_' + str(int(round(time.time())))
-                    move, numbox, boxes_motion = self.movingcheck(queue_id =self.name,image_id=image_id,CurFrame =frame_predict)
-                    frame = self.moving_visualize(move,numbox,boxes_motion,frame)
+                    # # #=============================== MOTION DETECT ===============================
+                    if self.Model_motion:
+                        image_id = str(frame_id)+ '_' + str(int(round(time.time())))
+                        move, numbox, boxes_motion = self.movingcheck(queue_id =self.name,image_id=image_id,CurFrame =frame_predict)
+                        frame = self.moving_visualize(move,numbox,boxes_motion,frame)
+                    else:
+                        move = False
                     frame_id +=1
                     # #=============================== OD DETECT ===================================
-                    frame_predict = cv2.cvtColor(frame_predict, cv2.COLOR_BGR2RGB)
-                    try:
-                        status, num_box, classes, score, boxes = self.OD_model.do_inference_sync(frame_predict,10)
-                    except: 
-                        status = -1
-                    
-                    person_check = False
-                    person_boxes = []
-                    if num_box != 0:
-                        bnbbox = boxes
-                        for index in range(num_box):
-                            if score[index] > 0.4 and classes[index] == 1 :
-                                h, w, _ = frame.shape
-                                x1, y1, x2, y2 = int(bnbbox[index][1] * w), int(bnbbox[index][0] * h), int(bnbbox[index][3] * w), int(bnbbox[index][2] * h)
-                                #cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2) 
-                                person_boxes.append(bnbbox[index])
-                                person_check = True
-                    # #=============================== OVERLAP ===========================================
+                    if self.Model_od:
+                        frame_predict = cv2.cvtColor(frame_predict, cv2.COLOR_BGR2RGB)
+                        try:
+                            status, num_box, classes, score, boxes = self.OD_model.do_inference_sync(frame_predict,10)
+                        except: 
+                            status = -1
+                        
+                        person_check = False
+                        person_boxes = []
+                        if num_box != 0:
+                            bnbbox = boxes
+                            for index in range(num_box):
+                                if score[index] > 0.4 and classes[index] == 1 :
+                                    h, w, _ = frame.shape
+                                    x1, y1, x2, y2 = int(bnbbox[index][1] * w), int(bnbbox[index][0] * h), int(bnbbox[index][3] * w), int(bnbbox[index][2] * h)
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2) 
+                                    person_boxes.append(bnbbox[index])
+                                    person_check = True
+                    else:
+                        person_check = False
+                    # # #=============================== OVERLAP ===========================================
                     if move== True and person_check == True:
                         save_check,frame = self.overlap_check(np.asarray(person_boxes),boxes_motion,frame)
                     else:
                         save_check = False
-                    #=============================== UPDATE STATUS ====================================
+                    # #=============================== UPDATE STATUS ====================================
                     if int(round(time.time())) - pre_time > 5:
                         pre_time = int(round(time.time()))
                         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
-                    #=============================== SHOW IMAGE =====================================
+                    #=============================== SAVE IMAGE =====================================
                     if save_check == True and int(round(time.time())) - pre_time_save > 1:
                         pre_time_save = int(round(time.time()))          
                         cur_time = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
                         name = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
                         cv2.imwrite(name,frame)
                         print("CAPTURED: ",self.name,'_ Time save:',cur_time)
-
-                    cv2.imshow('CAM'+self.name,frame)
-                    if cv2.waitKey(30)=='q':
-                        self.message_respond['error']='Stop stream'
-                        break
+                    #=============================== SHOW IMAGE =====================================
+                    if self.display:
+                        cv2.imshow('CAM'+self.name,frame)
+                        if cv2.waitKey(30)=='q':
+                            self.message_respond['error']='Stop stream'
+                            break
+                    else:
+                        cv2.destroyAllWindows()
                        
                 except:
                     self.message_respond['error']='Code error'
@@ -186,27 +199,37 @@ class Streaming(Process):
     def callback_child_process(self,ch, method, properties, body):
         new_recv = json.loads(body.decode('utf8'))
         print('=============================')
-        print(self.name)
         print('NEW RECIVE: ',new_recv) 
         print('=============================')
-        # print(self.channel.queue_declare(queue=self.URL).method.queue)
-        if new_recv['opcode'] == 'whoareu':
-            self.child_conn.send({'stream_name':self.name})
 
-        elif new_recv['opcode'] == 'timesetup':
-            self.child_conn.send({'start': self.start_date, 'stop': self.stop_date})
-
-        elif new_recv['opcode'] == 'settime':
-            if self.update_time(   new_recv['start'] , new_recv['stop']  ) :
-                self.child_conn.send({'opcode':'settime','state':'done'})
-            else:
-                self.child_conn.send({'opcode':'settime','state':'error'})
-        elif new_recv['opcode'] == 'stop':
+        if new_recv['opcode'] == 'stop':
             print('Stopping process : ',self.name) 
             self.message_respond['error']='Stop stream'
             self.Run = False 
         elif new_recv['opcode'] == 'check':    
             self.channel.basic_publish(exchange='', routing_key='result', body=json.dumps({"urls":self.name,"opcode":"start"}))
+        elif new_recv['opcode'] == 'start':
+            pass
+        else:
+            
+            if 'display' in new_recv['opcode'].keys():
+                if new_recv['opcode']['display'] == 'on':
+                    self.display = True
+                elif new_recv['opcode']['display'] == 'off':
+                    self.display = False
+            elif 'settime' in new_recv['opcode'].keys():
+                print(new_recv['opcode']['settime'])
+            elif 'model' in new_recv['opcode'].keys():
+                
+                if new_recv['opcode']['model']['motion'] == 'on':
+                    self.Model_motion = True
+                elif new_recv['opcode']['model']['motion'] == 'off':
+                    self.Model_motion = False
+                
+                if new_recv['opcode']['model']['od'] == 'on':
+                    self.Model_od = True
+                elif new_recv['opcode']['model']['od'] == 'off':
+                    self.Model_od = False
 
 class Check_alive(Process):
     def __init__(self, **kwargs):
@@ -238,15 +261,21 @@ def callback(ch, method, properties, body):
     stop_date  = time_day(2021, 10, 25, 6, 0, 0, 0)
 
     name_process = message_rabbitmq['urls'].split('/')[4]
-    if message_rabbitmq['opcode'] == 'start' and name_process not in running_process:
-        print('Start process: ',name_process)
+
+    if 'opcode' in message_rabbitmq.keys() and message_rabbitmq['opcode'] == 'start' and name_process not in running_process:
+        print('Start process: ',name_process) 
         Stream_= Start_newstreaming(name_process,message_rabbitmq['urls'],start_date,stop_date,FPS)
         processes[name_process]         = Stream_
         processes[name_process].start()
         channel.basic_publish(exchange='', routing_key=name_process, body=body)
-    elif message_rabbitmq['opcode']=='stop' and name_process in running_process:
+    elif 'opcode' in message_rabbitmq.keys() and message_rabbitmq['opcode']=='stop' and name_process in running_process:
+        print('Stop process',name_process)
         channel.basic_publish(exchange='', routing_key=name_process, body=body)
-
+    elif 'opcode' in message_rabbitmq.keys() and message_rabbitmq['opcode']!='stop' and name_process in running_process:
+        print('Update process', name_process)
+        channel.basic_publish(exchange='', routing_key=name_process, body=body)
+    else:
+        print('Check message again') 
 def recive_mes_process(ch, method, properties, body):
     #print('========================================')
     #print(" [x] [x] [x] ")
