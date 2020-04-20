@@ -16,7 +16,8 @@ import Motion_pb2_grpc
 from numproto import ndarray_to_proto, proto_to_ndarray
 import grpc
 import datetime
-import logging
+
+
 class Streaming(Process):
     
     def __init__(self, name, URL, **kwargs):
@@ -38,7 +39,7 @@ class Streaming(Process):
         self.channel = self.connection.channel()
         self.queue_name = self.name
         self.channel.queue_declare(queue=self.queue_name)
-        self.channel.queue_declare(queue='result')
+        self.channel.queue_declare(queue='logging')
         #self.channel.exchange_declare(exchange='check_status', exchange_type='fanout')
         self.channel.queue_bind(exchange='check_status', queue=self.queue_name)
         self.message_respond = {}
@@ -102,7 +103,7 @@ class Streaming(Process):
 
     def run(self):
         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
-
+        self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({"urls":self.name,"opcode":"start"}))
         save_dir = self.DATA_DIR + self.name
         if not os.path.isdir(save_dir):
             os.mkdir(save_dir)        # Create target Directory
@@ -168,12 +169,13 @@ class Streaming(Process):
                             pre_time = int(round(time.time()))
                             self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps({"urls":self.name,"opcode":"start"}))
                         #=============================== SAVE IMAGE =====================================
-                        if save_check == True and int(round(time.time())) - pre_time_save > 1:
+                        if save_check == True and int(round(time.time())) - pre_time_save > 5:
                             pre_time_save = int(round(time.time()))          
                             cur_time = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-                            name = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
-                            cv2.imwrite(name,frame)
-                            print("CAPTURED: ",self.name,'_ Time save:',cur_time)
+                            name_image_save = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
+                            cv2.imwrite(name_image_save,frame)
+                            self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({"urls":self.name,"result":str(cur_time)}))
+                            #print("CAPTURED: ",self.name,'_ Time save:',cur_time)
                         #=============================== SHOW IMAGE =====================================
                         if self.display:
                             cv2.imshow('CAM'+self.name,frame)
@@ -201,7 +203,7 @@ class Streaming(Process):
         self.message_respond['urls'] = self.name
         self.message_respond['opcode'] = 'stop'
         self.channel.basic_publish(exchange='', routing_key='send_main', body=json.dumps(self.message_respond))   
-
+        self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps(self.message_respond))
     def Comunicate_master(self):
         queue_empty = self.channel.queue_declare(queue=self.queue_name).method.message_count
         if queue_empty!=0:
@@ -224,14 +226,13 @@ class Streaming(Process):
             else:
                 print('Message error !!!')
         if 'update' in new_recv.keys():
+            self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({'urls':self.name,'update':new_recv['update']}))
             if 'display' in new_recv['update'].keys():
                 if new_recv['update']['display'] == 'on':
                     self.display = True
                 elif new_recv['update']['display'] == 'off':
                     self.display = False
-      
             elif 'model' in new_recv['update'].keys():
-                
                 if new_recv['update']['model']['motion'] == 'on':
                     self.Model_motion = True
                 elif new_recv['update']['model']['motion'] == 'off':
@@ -243,11 +244,11 @@ class Streaming(Process):
                     self.Model_od = False
             else:
                 print('Message error')
+                self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({"urls":self.name,"update":"Message error"}))
         if 'settime' in new_recv.keys():
             if self.update_time(new_recv['settime']['starttime'],new_recv['settime']['stoptime']):
-               print('Set time successfully')
-            else:
-               print('Set time error')
+                self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({'urls':self.name,'settime':new_recv['settime']}))
+                print('Set time successfully :' , self.start_date , self.stop_date)
     def comparing_date(self):
         nowdate = datetime.datetime.now().timestamp()
         if nowdate < self.start_date.timestamp():
@@ -279,11 +280,12 @@ class Streaming(Process):
             self.stop_date  = stop
             return True
         else:
-            return False
-
+            self.start_date = start
+            self.stop_date  = stop + datetime.timedelta(days=1)
+            return True
     def repeat_time(self):
-        self.stop_date += datetime.timedelta(minutes=2)
-        self.start_date += datetime.timedelta(minutes=2)
+        self.stop_date += datetime.timedelta(days=1)
+        self.start_date += datetime.timedelta(days=1)
 
 class Check_alive(Process):
     def __init__(self, **kwargs):
@@ -339,8 +341,8 @@ def recive_mes_process(ch, method, properties, body):
         print("Running process")
         print(len(running_process))
 
-
 if __name__ == "__main__":
+
     processes       =   {}
     running_process = []
     credentials = pika.PlainCredentials('user', 'user')
