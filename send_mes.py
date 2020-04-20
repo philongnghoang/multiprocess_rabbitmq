@@ -2,6 +2,13 @@ import pika
 import json
 import get_stream
 import sys
+connection = pika.BlockingConnection(
+    pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+channel.exchange_declare(exchange='check_status', exchange_type='fanout')
+channel.queue_declare(queue='mes')
+queue_name = 'mes'
+
 message = {}
 settime = {}
 model = {}
@@ -16,40 +23,26 @@ src_list = [
             'https://5a3505075bba2.streamlock.net:2952/live/cayqueo_cam03.stream/playlist.m3u8',
             'https://5a2f17f8a961a.streamlock.net:41938/live/ftilau3cam3.stream/playlist.m3u8',
             'https://5a2f17f8a961a.streamlock.net:41938/live/ftilau3cam7.stream/playlist.m3u8',
-            'https://5a2f17f8a961a.streamlock.net:41938/live/fti-lau1-cam09.stream/playlist.m3u8'              
+            'https://5a2f17f8a961a.streamlock.net:41938/live/fti-lau1-cam09.stream/playlist.m3u8',
+            'https://5a3505075bba2.streamlock.net:1952/live/dth_cs_cam21.stream/playlist.m3u8'              
    ]
 
-settime['starttime']='16:09'
-settime['stoptime'] ='16:10'
-
+settime['starttime']='2020:4:20:22:00'
+settime['stoptime'] ='2020:4:21:6:00'
+settime['repeat'] = 'off'
 model['od']='on'
 model['motion']='on'
 
+# for i in range(90,116):
+#     message['urls']=src_list[i]
+#     message['opcode'] = sys.argv[1]
+#     #message['settime'] = settime
+#     channel.basic_publish(exchange='', routing_key=queue_name, body=json.dumps(message))
 message['urls']=src_list[int(sys.argv[1])]
-
+message['settime'] = settime
 message['opcode'] = sys.argv[2]
-#message['settime'] = settime
-#message['update'] = None
-message['update'] = {'display':'on'}
-#message['update'] = {'model':model}
-
-connection = pika.BlockingConnection(
-    pika.ConnectionParameters(host='localhost'))
-channel = connection.channel()
-channel.exchange_declare(exchange='check_status', exchange_type='fanout')
-channel.queue_declare(queue='mes')
-
-
-
-#for i in range(0,6):
-#message = json.dumps({"urls":src_list[int(sys.argv[1])],"opcode": sys.argv[2]})
-queue_name = 'mes'
-#queue_name = src_list[int(sys.argv[1])].split('/')[4]
-#message = json.dumps({"urls":src_list[i],"opcode": sys.argv[1]})
+message['update']={'display':'on'}
 channel.basic_publish(exchange='', routing_key=queue_name, body=json.dumps(message))
-
-#message = json.dumps({"opcode":'check'})
-#channel.basic_publish(exchange='check_status',routing_key='', body=message)
 
 print(" [x] Sent 'Hello World!'")
 connection.close()

@@ -10,7 +10,7 @@ def recive_mes(ch, method, properties, body):
       mess_recive = json.loads(body.decode('utf8'))
       
       if 'opcode' in mess_recive.keys():
-            logging.info(mess_recive['urls'] +'===='+ mess_recive['opcode'])
+            logging.info(mess_recive['urls'] +' ==== '+ mess_recive['opcode'])
       if 'update' in mess_recive.keys():
             logging.info(mess_recive['urls'] +' ==== Update === '+json.dumps(mess_recive['update']))
       if 'settime' in mess_recive.keys():
@@ -20,6 +20,8 @@ def recive_mes(ch, method, properties, body):
 credentials = pika.PlainCredentials('user', 'user')
 connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost',credentials=credentials))
 channel = connection.channel()
+
+channel.queue_declare(queue='logging')
 channel.basic_consume(queue='logging', on_message_callback=recive_mes, auto_ack=True)
 print(' [*] Waiting for messages. To exit press CTRL+C')
 channel.start_consuming() 

@@ -27,7 +27,7 @@ class Streaming(Process):
         self.URL = URL 
         self.Run = True
         self.FPS = 1
-        self.display = True
+        self.display = False
         self.Model_od = True
         self.Model_motion = True
         self.repeat = False
@@ -173,13 +173,13 @@ class Streaming(Process):
                             pre_time_save = int(round(time.time()))          
                             cur_time = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
                             name_image_save = save_dir + "/" + self.name +'_'+str(cur_time)+'.jpg'
-                            cv2.imwrite(name_image_save,frame)
+                            #cv2.imwrite(name_image_save,frame)
                             self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({"urls":self.name,"result":str(cur_time)}))
                             #print("CAPTURED: ",self.name,'_ Time save:',cur_time)
                         #=============================== SHOW IMAGE =====================================
                         if self.display:
                             cv2.imshow('CAM'+self.name,frame)
-                            if cv2.waitKey(30)=='q':
+                            if cv2.waitKey(1)=='q':
                                 self.message_respond['error']='Stop stream'
                                 break
                         else:
@@ -246,9 +246,12 @@ class Streaming(Process):
                 print('Message error')
                 self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({"urls":self.name,"update":"Message error"}))
         if 'settime' in new_recv.keys():
-            if self.update_time(new_recv['settime']['starttime'],new_recv['settime']['stoptime']):
+            if self.update_time(new_recv['settime']['starttime'],new_recv['settime']['stoptime'],new_recv['settime']['repeat']):
                 self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({'urls':self.name,'settime':new_recv['settime']}))
                 print('Set time successfully :' , self.start_date , self.stop_date)
+            else:
+                self.channel.basic_publish(exchange='', routing_key='logging', body=json.dumps({'urls':self.name,'settime':"Message error"}))
+                print('Set time error')
     def comparing_date(self):
         nowdate = datetime.datetime.now().timestamp()
         if nowdate < self.start_date.timestamp():
@@ -262,31 +265,30 @@ class Streaming(Process):
             self.wait = False
             return False
 
-    def update_time(self,starttime_list,stoptime_list):
+    def update_time(self,starttime_list,stoptime_list,flag_repeat):
         nowdate = datetime.datetime.now()
         starttime_list = starttime_list.split(':')
         stoptime_list = stoptime_list.split(':')
         if len(starttime_list)==5 and len(stoptime_list)==5:
             start = datetime.datetime(int(starttime_list[0]),int(starttime_list[1]),int(starttime_list[2]),int(starttime_list[3]),int(starttime_list[4]), 0, 0)
             stop = datetime.datetime(int(stoptime_list[0]),int(stoptime_list[1]),int(stoptime_list[2]),int(stoptime_list[3]),int(stoptime_list[4]), 0, 0)
-            self.repeat = False
-        elif len(starttime_list)==2 and len(stoptime_list)==2:
-            start = datetime.datetime(nowdate.year, nowdate.month, nowdate.day,int(starttime_list[0]),int(starttime_list[1]), 0, 0)
-            stop = datetime.datetime(nowdate.year, nowdate.month, nowdate.day,int(stoptime_list[0]),int(stoptime_list[1]), 0, 0)
-            self.repeat = True
 
-        if nowdate.timestamp() < stop.timestamp():
-            self.start_date = start
-            self.stop_date  = stop
-            return True
+            if nowdate.timestamp() < stop.timestamp() and start.timestamp() < stop.timestamp():
+                if flag_repeat == 'on':
+                    self.repeat = True
+                else:
+                    self.repeat = False
+                self.start_date = start
+                self.stop_date  = stop
+                return True
+            else:
+                return False
         else:
-            self.start_date = start
-            self.stop_date  = stop + datetime.timedelta(days=1)
-            return True
+            return False
+            
     def repeat_time(self):
         self.stop_date += datetime.timedelta(days=1)
         self.start_date += datetime.timedelta(days=1)
-
 class Check_alive(Process):
     def __init__(self, **kwargs):
         super(Check_alive, self).__init__()
